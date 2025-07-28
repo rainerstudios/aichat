@@ -1,5 +1,10 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
 from .langgraph.agent import assistant_ui_graph
 from .add_langgraph_route import add_langgraph_route
 
@@ -17,5 +22,7 @@ add_langgraph_route(app, assistant_ui_graph, "/api/chat")
 
 if __name__ == "__main__":
     import uvicorn
+    import logging
 
+    logging.basicConfig(filename='backend.log', level=logging.INFO)
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,58 +1,82 @@
-# assistant-ui-langgraph-fastapi
+# XGaming Server Support - AI Chat Assistant
 
+An AI-powered chat assistant built with Next.js frontend and Python FastAPI backend, specializing in Pterodactyl panel server management and game server hosting support.
 
-A demonstration project that combines LangGraph, assistant-stream, and FastAPI to create an AI agent with a modern UI. The project uses [assistant-ui](https://www.assistant-ui.com/) and Next.js.
+## Features
 
-## Overview
+- **Clean Assistant-UI Interface** - Modern chat UI with sidebar navigation
+- **Pterodactyl Panel Expertise** - Specialized AI assistant for game server management
+- **Real-time Streaming** - Live response streaming for better user experience
+- **LangGraph Integration** - Advanced conversation flow management
+- **Tool Support** - Extensible tool system for server management tasks
 
-This project showcases:
+## Architecture
 
-- A LangGraph agent running on a FastAPI
-- Real-time response streaming to the frontend using assistant-stream
-- A modern chat UI built with assistant-ui and Next.js
-- Demonstrate how to integrate external tools and APIs
+### Frontend (`/frontend`)
+- **Next.js 15** with App Router
+- **assistant-ui/react** for chat interface
+- **Tailwind CSS** for styling
+- **TypeScript** for type safety
 
-## Prerequisites
+### Backend (`/backend`)
+- **FastAPI** with Python
+- **LangGraph** for conversation management
+- **OpenAI GPT** integration
+- **Assistant-stream** for response streaming
 
-- Python 3.11
-- Node.js v20.18.0
-- npm v10.9.2
-- Yarn v1.22.22
-
-## Project Structure
-
-```
-assistant-ui-langgraph-fastapi/
-├── backend/         # FastAPI + assistant-stream + LangGraph server
-└── frontend/        # Next.js + assistant-ui client
-```
-
-## Setup Instructions
-
-### Set up environment variables
-
-Go to `./backend` and create `.env` file. Follow the example in `.env.example`.
+## Getting Started
 
 ### Backend Setup
 
-The backend is built using the LangChain CLI and utilizes LangGraph's `create_react_agent` for agent creation.
-
+1. Navigate to the backend directory:
 ```bash
 cd backend
+```
+
+2. Create virtual environment and install dependencies:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install poetry
 poetry install
-poetry run python -m app.server
+```
+
+3. Set up environment variables:
+```bash
+cp .env.example .env
+# Add your OpenAI API key
+```
+
+4. Start the backend server:
+```bash
+python -m app.server
 ```
 
 ### Frontend Setup
 
-The frontend is generated using the assistant-ui CLI tool.
-
+1. Navigate to the frontend directory:
 ```bash
 cd frontend
-yarn install
-yarn dev
 ```
 
-## Credits
+2. Install dependencies:
+```bash
+npm install
+```
 
-Based on https://github.com/hminle/langserve-assistant-ui
+3. Start the development server:
+```bash
+npm run dev
+```
+
+## Deployment
+
+The application is deployed with:
+- **Frontend**: Next.js running on port 3000
+- **Backend**: FastAPI running on port 8000
+- **Nginx**: Reverse proxy with SSL termination
+- **Domain**: https://chat.xgaming.pro
+
+## License
+
+MIT License

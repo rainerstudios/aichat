@@ -11,6 +11,7 @@ from langchain_core.messages import (
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List, Literal, Union, Optional, Any
+from langgraph.errors import NodeInterrupt
 
 
 class LanguageModelTextPart(BaseModel):
@@ -154,36 +155,44 @@ def add_langgraph_route(app: FastAPI, graph, path: str):
         async def run(controller: RunController):
             tool_calls = {}
             tool_calls_by_idx = {}
+            try:
+                async for msg, metadata in graph.astream(
+                    {"messages": inputs},
+                    {
+                        "configurable": {
+                            "system": request.system,
+                            "frontend_tools": request.tools,
+                        }
+                    },
+                    stream_mode="messages",
+                ):
+                    if isinstance(msg, ToolMessage):
+                        tool_controller = tool_calls[msg.tool_call_id]
+                        tool_controller.set_result(msg.content)
 
-            async for msg, metadata in graph.astream(
-                {"messages": inputs},
-                {
-                    "configurable": {
-                        "system": request.system,
-                        "frontend_tools": request.tools,
-                    }
-                },
-                stream_mode="messages",
-            ):
-                if isinstance(msg, ToolMessage):
-                    tool_controller = tool_calls[msg.tool_call_id]
-                    tool_controller.set_result(msg.content)
+                    if isinstance(msg, AIMessageChunk) or isinstance(msg, AIMessage):
+                        if msg.content:
+                            controller.append_text(msg.content)
 
-                if isinstance(msg, AIMessageChunk) or isinstance(msg, AIMessage):
-                    if msg.content:
-                        controller.append_text(msg.content)
+                        for chunk in msg.tool_call_chunks:
+                            if not chunk["index"] in tool_calls_by_idx:
+                                tool_controller = await controller.add_tool_call(
+                                    chunk["name"], chunk["id"]
+                                )
+                                tool_calls_by_idx[chunk["index"]] = tool_controller
+                                tool_calls[chunk["id"]] = tool_controller
+                            else:
+                                tool_controller = tool_calls_by_idx[chunk["index"]]
 
-                    for chunk in msg.tool_call_chunks:
-                        if not chunk["index"] in tool_calls_by_idx:
-                            tool_controller = await controller.add_tool_call(
-                                chunk["name"], chunk["id"]
-                            )
-                            tool_calls_by_idx[chunk["index"]] = tool_controller
-                            tool_calls[chunk["id"]] = tool_controller
-                        else:
-                            tool_controller = tool_calls_by_idx[chunk["index"]]
-
-                        tool_controller.append_args_text(chunk["args"])
+                            tool_controller.append_args_text(chunk["args"])
+            except NodeInterrupt as e:
+                if e.values and "messages" in e.values:
+                    msg: AIMessage = e.values["messages"][-1]
+                    for tool_call in msg.tool_calls:
+                        tool_controller = await controller.add_tool_call(
+                            tool_call["name"], tool_call["id"]
+                        )
+                        tool_controller.set_args(tool_call["args"])
 
         return DataStreamResponse(create_run(run))
 
