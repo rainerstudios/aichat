@@ -1,5 +1,10 @@
-import { Assistant } from "./assistant";
+import { AnonymousCloudProvider } from "@/components/AnonymousCloudProvider";
+import { Thread } from "@/components/assistant-ui/thread";
 
 export default function Home() {
-  return <Assistant />;
+  return (
+    <AnonymousCloudProvider>
+      <Thread />
+    </AnonymousCloudProvider>
+  );
 }

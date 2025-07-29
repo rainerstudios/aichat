@@ -5,6 +5,8 @@ An AI-powered chat assistant built with Next.js frontend and Python FastAPI back
 ## Features
 
 - **Clean Assistant-UI Interface** - Modern chat UI with sidebar navigation
+- **Chat Persistence** - Automatic conversation history with Assistant-UI Cloud
+- **Thread Management** - Create, switch between, and organize conversations
 - **Pterodactyl Panel Expertise** - Specialized AI assistant for game server management
 - **Real-time Streaming** - Live response streaming for better user experience
 - **LangGraph Integration** - Advanced conversation flow management
@@ -25,6 +27,10 @@ An AI-powered chat assistant built with Next.js frontend and Python FastAPI back
 - **Assistant-stream** for response streaming
 
 ## Getting Started
+
+### Chat Persistence (Optional)
+
+For persistent chat history, see [CLOUD_SETUP.md](./CLOUD_SETUP.md) for detailed instructions on setting up Assistant-UI Cloud integration.
 
 ### Backend Setup
 
