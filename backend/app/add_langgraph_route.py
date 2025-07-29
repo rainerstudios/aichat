@@ -148,30 +148,45 @@ class ChatRequest(BaseModel):
     system: Optional[str] = ""
     tools: Optional[List[FrontendToolCall]] = []
     messages: List[LanguageModelV1Message]
+    ptero_context: Optional[dict] = None
 
 
 def add_langgraph_route(app: FastAPI, graph, path: str):
     async def chat_completions(
         request: ChatRequest,
-        user: UserSession = Depends(get_current_user)  # ADD AUTHENTICATION
+        user: UserSession = Depends(get_current_user)
     ):
         inputs = convert_to_langchain_messages(request.messages)
+
+        # Extract iframe context from the Pterodactyl context
+        current_server_id = None
+        pterodactyl_user_id = None
+        
+        if request.ptero_context:
+            current_server_id = request.ptero_context.get('serverId')
+            pterodactyl_user_id = request.ptero_context.get('userId')  # From iframe postMessage
 
         async def run(controller: RunController):
             tool_calls = {}
             tool_calls_by_idx = {}
             try:
                 async for msg, metadata in graph.astream(
-                    {"messages": inputs},
+                    {
+                        "messages": inputs,
+                        "current_server_id": current_server_id,
+                        "pterodactyl_user_id": pterodactyl_user_id,  # From iframe context
+                    },
                     {
                         "configurable": {
                             "system": request.system,
                             "frontend_tools": request.tools,
-                            "user_session": {  # ADD USER CONTEXT
+                            "current_server_id": current_server_id,
+                            "pterodactyl_user_id": pterodactyl_user_id,
+                            "user_session": {
                                 "user_id": user.user_id,
                                 "session_id": user.session_id,
                                 "accessible_servers": user.servers,
-                                "user_permissions": user.permissions
+                                "user_permissions": user.permissions,
                             }
                         }
                     },

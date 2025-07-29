@@ -2,7 +2,12 @@ from langchain_core.tools import tool
 from typing import Dict, List, Optional, Any
 import asyncio
 from ..services.pterodactyl_client import PterodactylClient, PterodactylAPIError
+from ..services.pterodactyl_admin_client import PterodactylAdminClient, create_pterodactyl_admin_client
 from ..services.user_manager import user_manager
+from ..services.cloudflare_autorag import create_autorag_service, format_autorag_response
+from ..services.cache_service import get_cache
+from ..services.request_deduplicator import get_deduplicator
+from ..services.local_docs_fallback import get_local_docs_fallback
 import json
 
 # Game detection patterns based on Pterodactyl's gameImageMapping.ts
@@ -39,6 +44,11 @@ def detect_game_type(egg_name: str = "", docker_image: str = "", variables: list
                 r'\b(craftbukkit|mohist|magma|arclight)\b'
             ],
             "priority": 10
+        },
+        {
+            "name": "Arma Reforger",
+            "patterns": [r'\barma\s+reforger\b', r'reforger'],
+            "priority": 9
         },
         # Other popular games
         {
@@ -166,41 +176,125 @@ def detect_game_type(egg_name: str = "", docker_image: str = "", variables: list
     
     return best_match or "Unknown"
 
-# Helper function to get client for user
-def get_user_client(session_id: str) -> PterodactylClient:
-    """Get Pterodactyl client for authenticated user"""
-    session = user_manager.get_session(session_id)
-    if not session:
-        raise ValueError("Invalid session - please authenticate")
+# Helper function to get admin client (centralized)
+def get_admin_client() -> PterodactylAdminClient:
+    """Get Pterodactyl admin client for centralized management"""
+    return create_pterodactyl_admin_client()
+
+# Helper function to extract user context from iframe/state
+def get_user_context_from_state(state: dict) -> tuple[int, str]:
+    """Extract pterodactyl_user_id and current_server_id from agent state"""
+    pterodactyl_user_id = state.get("pterodactyl_user_id")
+    current_server_id = state.get("current_server_id")
     
-    return PterodactylClient(session.api_key)
+    if not pterodactyl_user_id:
+        raise ValueError("No Pterodactyl user ID found in context - iframe integration issue")
+    
+    return int(pterodactyl_user_id), current_server_id
 
 # Helper function to detect server from context
-async def detect_server_id(session_id: str, server_hint: str = None) -> str:
-    """Auto-detect server ID from user context"""
-    session = user_manager.get_session(session_id)
-    if not session:
-        raise ValueError("Invalid session")
+async def detect_server_id(pterodactyl_user_id: int, server_hint: str = None) -> str:
+    """Auto-detect server ID from user context using admin API"""
+    admin_client = get_admin_client()
     
-    # If user specified a server
+    # If user specified a server, verify they own it
     if server_hint and server_hint != "auto-detect":
-        # If no servers specified, allow all (admin mode)
-        if not session.servers or server_hint in session.servers:
+        if await admin_client.verify_user_owns_server(pterodactyl_user_id, server_hint):
             return server_hint
         else:
-            raise ValueError(f"You don't have access to server '{server_hint}'")
+            raise ValueError(f"You don't have access to server '{server_hint}' or it doesn't exist")
     
     # Auto-detect: use first available server
-    if session.servers:
-        return session.servers[0]
-    
-    # Last resort: get from API
-    async with get_user_client(session_id) as client:
-        servers = await client.get_servers()
-        if servers:
-            return servers[0]["attributes"]["identifier"]
+    async with admin_client:
+        user_servers = await admin_client.get_user_servers(pterodactyl_user_id)
+        if user_servers:
+            return user_servers[0].get("uuid", user_servers[0].get("identifier", ""))
     
     raise ValueError("No servers found for your account")
+
+@tool
+async def query_documentation(query: str, game_type: str = None, **kwargs) -> str:
+    """
+    Query documentation for server management, game-specific guides, and troubleshooting information.
+    This searches through comprehensive documentation from Pterodactyl, game guides, and server management resources.
+    Use this tool for ANY questions about:
+    - Server setup and configuration
+    - Game-specific settings and mods
+    - Troubleshooting server issues
+    - Best practices and guides
+    """
+    try:
+        # Validate input
+        if not query or len(query.strip()) == 0:
+            return "Please provide a specific question to search the documentation."
+        
+        # Limit query length to prevent issues
+        if len(query) > 500:
+            query = query[:500] + "..."
+        
+        # Check cache first for performance improvement
+        cache = get_cache()
+        cached_response = await cache.get(query, game_type)
+        if cached_response:
+            return f"{cached_response}\n\n*[Cached response for faster performance]*"
+        
+        # Use deduplicator to prevent multiple identical queries
+        deduplicator = get_deduplicator()
+        
+        async def _execute_query():
+            async with create_autorag_service() as autorag:
+                # Build enhanced query with context (but keep it concise)
+                enhanced_query = query.strip()
+                
+                # Add game type context if provided
+                if game_type and game_type != "Unknown":
+                    enhanced_query = f"Game: {game_type}\n\nQuestion: {enhanced_query}"
+                
+                response = await autorag.query(
+                    question=enhanced_query,
+                    max_results=3  # Reduced to prevent large responses
+                )
+                
+                formatted_response = format_autorag_response(response)
+                
+                # Ensure response isn't empty
+                if not formatted_response or formatted_response.strip() == "No answer found":
+                    return "I couldn't find specific information about that in the documentation. Could you rephrase your question or be more specific?"
+                
+                # Cache the successful response
+                await cache.set(query, formatted_response, game_type)
+                
+                return formatted_response
+        
+        # Execute with deduplication
+        return await deduplicator.deduplicate(query, game_type or "generic", _execute_query)
+            
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Documentation query error: {error_msg}")  # Log for debugging
+        
+        # Try local docs fallback when AutoRAG fails
+        try:
+            local_fallback = get_local_docs_fallback()
+            fallback_result = await local_fallback.search_local_docs(query, game_type)
+            
+            if fallback_result:
+                # Cache the fallback result too
+                cache = get_cache()
+                await cache.set(query, fallback_result, game_type)
+                return fallback_result
+        except Exception as fallback_error:
+            print(f"Local docs fallback also failed: {fallback_error}")
+        
+        # Final fallback to general error messages
+        if "timeout" in error_msg.lower():
+            return "The documentation search timed out. Please try a simpler question or try again."
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            return "Documentation service is currently unavailable. I can try to answer from my general knowledge."
+        elif "autorag" in error_msg.lower():
+            return "The documentation service is experiencing issues. I'll answer based on my general knowledge about server management."
+        else:
+            return "I encountered an issue searching the documentation. Let me try to answer from my general knowledge instead."
 
 @tool
 async def get_server_status(server_id: str = "auto-detect", session_id: str = "admin_session") -> str:
@@ -317,11 +411,11 @@ async def restart_server(server_id: str = "auto-detect", confirmation_data: str 
                 pass
         
         # No confirmation provided, show confirmation dialog
-        actual_server_id = await detect_server_id(session_id, server_id)
+        actual_server_id = await detect_server_id(pterodactyl_user_id, server_id)
         
         # Get server details for confirmation UI
-        async with get_user_client(session_id) as client:
-            details = await client.get_server_details(actual_server_id)
+        async with get_admin_client() as admin_client:
+            details = await admin_client.get_server_details(actual_server_id, pterodactyl_user_id)
         
         # Return JSON with server details for the UI to handle confirmation
         return json.dumps({
@@ -376,11 +470,11 @@ async def stop_server(server_id: str = "auto-detect", confirmation_data: str = N
                 pass
         
         # No confirmation provided, show confirmation dialog
-        actual_server_id = await detect_server_id(session_id, server_id)
+        actual_server_id = await detect_server_id(pterodactyl_user_id, server_id)
         
         # Get server details for confirmation UI
-        async with get_user_client(session_id) as client:
-            details = await client.get_server_details(actual_server_id)
+        async with get_admin_client() as admin_client:
+            details = await admin_client.get_server_details(actual_server_id, pterodactyl_user_id)
         
         # Return JSON with server details for the UI to handle confirmation
         return json.dumps({
@@ -522,4 +616,5 @@ tools = [
     start_server,
     send_server_command,
     list_user_servers,
+    query_documentation,
 ]

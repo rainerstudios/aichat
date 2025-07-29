@@ -5,8 +5,8 @@ import os
 
 load_dotenv()
 
-from .langgraph.agent import assistant_ui_graph
-from .add_langgraph_route import add_langgraph_route
+from app.langgraph.agent import assistant_ui_graph
+from app.add_langgraph_route import add_langgraph_route
 
 app = FastAPI()
 # cors

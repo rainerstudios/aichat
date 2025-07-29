@@ -1,0 +1,10 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+httpx==0.27.2
+python-dotenv==1.0.1
+pydantic==2.10.4
+langchain-core==0.3.29
+langchain-openai==0.3.28
+langgraph==0.2.76
+assistant-stream==0.0.28
+PyJWT==2.10.1
