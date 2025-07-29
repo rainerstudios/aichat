@@ -8,10 +8,12 @@ from langchain_core.messages import (
     SystemMessage,
     BaseMessage,
 )
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from typing import List, Literal, Union, Optional, Any
 from langgraph.errors import NodeInterrupt
+from .middleware.auth import get_current_user
+from .services.user_manager import UserSession
 
 
 class LanguageModelTextPart(BaseModel):
@@ -149,7 +151,10 @@ class ChatRequest(BaseModel):
 
 
 def add_langgraph_route(app: FastAPI, graph, path: str):
-    async def chat_completions(request: ChatRequest):
+    async def chat_completions(
+        request: ChatRequest,
+        user: UserSession = Depends(get_current_user)  # ADD AUTHENTICATION
+    ):
         inputs = convert_to_langchain_messages(request.messages)
 
         async def run(controller: RunController):
@@ -162,13 +167,20 @@ def add_langgraph_route(app: FastAPI, graph, path: str):
                         "configurable": {
                             "system": request.system,
                             "frontend_tools": request.tools,
+                            "user_session": {  # ADD USER CONTEXT
+                                "user_id": user.user_id,
+                                "session_id": user.session_id,
+                                "accessible_servers": user.servers,
+                                "user_permissions": user.permissions
+                            }
                         }
                     },
                     stream_mode="messages",
                 ):
                     if isinstance(msg, ToolMessage):
-                        tool_controller = tool_calls[msg.tool_call_id]
-                        tool_controller.set_result(msg.content)
+                        if msg.tool_call_id in tool_calls:
+                            tool_controller = tool_calls[msg.tool_call_id]
+                            tool_controller.set_result(msg.content)
 
                     if isinstance(msg, AIMessageChunk) or isinstance(msg, AIMessage):
                         if msg.content:
@@ -196,4 +208,9 @@ def add_langgraph_route(app: FastAPI, graph, path: str):
 
         return DataStreamResponse(create_run(run))
 
+    # Add the route
     app.add_api_route(path, chat_completions, methods=["POST"])
+    
+    # Also add authentication routes
+    from .api.auth import router as auth_router
+    app.include_router(auth_router, prefix="/api/auth", tags=["authentication"])

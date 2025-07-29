@@ -17,6 +17,10 @@ langchain-openai = "^0.2.8"
 langgraph = "^0.2.46"
 python-dotenv = "^1.0.1"
 assistant-stream = "^0.0.5"
+httpx = "^0.24.0"
+python-multipart = "^0.0.6"
+pydantic-settings = "^2.0.0"
+pyjwt = "^2.8.0"
 
 
 [tool.poetry.group.dev.dependencies]

@@ -58,13 +58,39 @@ def get_tools(config):
 
 
 async def call_model(state, config):
-    system = config["configurable"]["system"]
+    """Enhanced model call with user context and safety checks"""
+    
+    # Extract user context from config
+    system_prompt = config["configurable"].get("system", "")
+    frontend_tools = config["configurable"].get("frontend_tools", [])
+    user_session = config["configurable"].get("user_session", {})
+    
+    # Add user context to system prompt
+    enhanced_system = f"""{system_prompt}
 
-    messages = [SystemMessage(content=system)] + state["messages"]
+CURRENT USER CONTEXT:
+- User ID: {user_session.get('user_id', 'unknown')}
+- Available Servers: {len(user_session.get('accessible_servers', []))} servers
+- Permissions: {', '.join(user_session.get('user_permissions', []))}
+
+TOOL USAGE GUIDELINES:
+- Always use session_id parameter: "{user_session.get('session_id', 'dev_session')}"
+- For server operations, you can use "auto-detect" to use user's first server
+- Always explain what operations will do before executing
+- Ask for confirmation for potentially disruptive operations
+
+SAFETY RULES:
+- Server restarts/stops require explicit user confirmation
+- Explain impact on players before executing commands
+- Use server status checks to verify operations completed
+- Guide users through troubleshooting step-by-step
+"""
+    
+    messages = [SystemMessage(content=enhanced_system)] + state["messages"]
     model_with_tools = model.bind_tools(get_tool_defs(config))
     response = await model_with_tools.ainvoke(messages)
-    # We return a list, because this will get added to the existing list
-    return {"messages": response}
+    
+    return {"messages": [response]}
 
 
 async def run_tools(input, config, **kwargs):
