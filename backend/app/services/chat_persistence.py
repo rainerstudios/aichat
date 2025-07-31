@@ -271,14 +271,43 @@ class ChatPersistenceService:
             )
             session.add(message)
             
-            # Auto-generate thread title from first user message
-            if (request.role == "user" and 
-                sequence_number == 1 and 
-                thread.title == "New Chat"):
-                
-                new_title = ThreadNamingService.generate_title(request.content)
-                if new_title != "New Chat":
-                    thread.title = new_title
+            # Auto-generate thread title from the first exchange
+            if (
+                request.role == "assistant"
+                and sequence_number == 2
+                and thread.title == "New Chat"
+            ):
+                # Fetch the first user message
+                first_message_result = await session.execute(
+                    select(ChatMessage)
+                    .where(ChatMessage.thread_id == thread.id)
+                    .where(ChatMessage.role == "user")
+                    .order_by(ChatMessage.sequence_number)
+                    .limit(1)
+                )
+                first_user_message = first_message_result.scalar_one_or_none()
+
+                if first_user_message:
+                    # Define a background task to generate and update the title
+                    async def generate_and_set_title():
+                        try:
+                            new_title = await ThreadNamingService.generate_title_from_exchange(
+                                first_user_message.content, request.content
+                            )
+                            if new_title and new_title != "New Chat":
+                                async with self.async_session() as task_session:
+                                    await task_session.execute(
+                                        update(ChatThread)
+                                        .where(ChatThread.id == thread.id)
+                                        .values(title=new_title)
+                                    )
+                                    await task_session.commit()
+                        except Exception as e:
+                            # Log the error, but don't let it crash the main process
+                            print(f"Error generating thread title: {e}")
+                    
+                    # Run the title generation in the background
+                    asyncio.create_task(generate_and_set_title())
             
             await session.commit()
             await session.refresh(message)

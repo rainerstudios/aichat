@@ -1,0 +1,18 @@
+{
+  "name": "xgaming-ai-chat",
+  "version": "1.0.0",
+  "description": "XGaming Server AI Chat Application",
+  "scripts": {
+    "dev": "./start-app.sh",
+    "start": "./start-app.sh",
+    "backend": "cd backend && python -m app.server",
+    "frontend": "cd frontend-new && npm run dev",
+    "install-deps": "cd backend && pip install -r requirements_clean.txt && cd ../frontend-new && npm install"
+  },
+  "repository": {
+    "type": "git",
+    "url": "."
+  },
+  "author": "XGaming Server",
+  "license": "MIT"
+}
