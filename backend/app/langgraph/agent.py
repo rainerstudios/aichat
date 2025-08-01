@@ -43,7 +43,10 @@ async def query_rewrite_node(state: AgentState, config) -> AgentState:
         return state
     
     original_query = messages[-1].content
-    if not original_query or len(original_query.strip()) < 5:
+    # Handle both string and list content
+    if isinstance(original_query, list):
+        original_query = " ".join(str(item) for item in original_query if item)
+    if not original_query or len(str(original_query).strip()) < 5:
         return state
     
     # Get chat history and game context
