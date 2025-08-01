@@ -34,9 +34,91 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
     copyToClipboard(code);
   };
 
+  // Enhanced language display with intelligent detection
+  const getLanguageDisplay = (lang: string | undefined) => {
+    if (!lang) return "text";
+    
+    // Common language mappings for better display
+    const languageMap: Record<string, string> = {
+      "js": "JavaScript",
+      "ts": "TypeScript",
+      "jsx": "React JSX",
+      "tsx": "React TSX",
+      "py": "Python",
+      "python": "Python",
+      "java": "Java",
+      "cpp": "C++",
+      "c": "C",
+      "cs": "C#",
+      "php": "PHP",
+      "rb": "Ruby",
+      "go": "Go",
+      "rs": "Rust",
+      "sh": "Shell",
+      "bash": "Bash",
+      "zsh": "ZSH",
+      "sql": "SQL",
+      "json": "JSON",
+      "yaml": "YAML",
+      "yml": "YAML",
+      "xml": "XML",
+      "html": "HTML",
+      "css": "CSS",
+      "scss": "SCSS",
+      "sass": "SASS",
+      "md": "Markdown",
+      "dockerfile": "Dockerfile",
+      "nginx": "NGINX Config",
+      "conf": "Configuration"
+    };
+
+    return languageMap[lang.toLowerCase()] || lang;
+  };
+
+  // Get language icon emoji
+  const getLanguageIcon = (lang: string | undefined) => {
+    if (!lang) return "📄";
+    
+    const iconMap: Record<string, string> = {
+      "js": "🟨",
+      "javascript": "🟨", 
+      "ts": "🔷",
+      "typescript": "🔷",
+      "jsx": "⚛️",
+      "tsx": "⚛️",
+      "py": "🐍",
+      "python": "🐍",
+      "java": "☕",
+      "cpp": "⚙️",
+      "c": "⚙️",
+      "cs": "🔷",
+      "php": "🐘",
+      "rb": "💎",
+      "ruby": "💎",
+      "go": "🐹",
+      "rs": "🦀",
+      "rust": "🦀",
+      "sh": "🐚",
+      "bash": "🐚",
+      "sql": "🗃️",
+      "json": "📋",
+      "yaml": "📝",
+      "yml": "📝",
+      "html": "🌐",
+      "css": "🎨",
+      "dockerfile": "🐳",
+      "nginx": "🌐"
+    };
+
+    return iconMap[lang.toLowerCase()] || "📄";
+  };
+
   return (
     <div className="flex items-center justify-between gap-4 rounded-t-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white">
-      <span className="lowercase [&>span]:text-xs">{language}</span>
+      <div className="flex items-center gap-2">
+        <span className="text-base">{getLanguageIcon(language)}</span>
+        <span className="capitalize text-zinc-300">{getLanguageDisplay(language)}</span>
+      </div>
       <TooltipIconButton tooltip="Copy" onClick={onCopy}>
         {!isCopied && <CopyIcon />}
         {isCopied && <CheckIcon />}
@@ -117,13 +199,18 @@ const defaultComponents = memoizeMarkdownComponents({
     <sup className={cn("[&>a]:text-xs [&>a]:no-underline", className)} {...props} />
   ),
   pre: ({ className, ...props }) => (
-    <pre className={cn("overflow-x-auto rounded-b-lg bg-black p-4 text-white", className)} {...props} />
+    <pre className={cn("overflow-x-auto rounded-b-lg bg-zinc-950 p-4 text-zinc-100 font-mono text-sm leading-relaxed", className)} {...props} />
   ),
   code: function Code({ className, ...props }) {
     const isCodeBlock = useIsMarkdownCodeBlock();
     return (
       <code
-        className={cn(!isCodeBlock && "bg-muted rounded border font-semibold", className)}
+        className={cn(
+          isCodeBlock 
+            ? "block text-zinc-100" 
+            : "bg-muted text-foreground rounded px-1.5 py-0.5 font-mono text-sm font-semibold border",
+          className
+        )}
         {...props}
       />
     );

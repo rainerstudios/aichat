@@ -5,7 +5,7 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
 } from "@assistant-ui/react";
-import React, { type FC } from "react";
+import React, { type FC, useEffect, useRef } from "react";
 import {
   ArrowDownIcon,
   CheckIcon,
@@ -24,10 +24,61 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { ToolFallback } from "./tool-fallback";
 import { RestartServerTool } from "@/components/tools/RestartServerTool";
 import { StopServerTool } from "@/components/tools/StopServerTool";
+import { ServerStatusTool } from "@/components/tools/ServerStatusTool";
+import { AutoRAGQueryTool } from "@/components/tools/AutoRAGQueryTool";
+import { PterodactylActionTool } from "@/components/tools/PterodactylActionTool";
 // import { StreamingProgress } from "@/components/ui/streaming-progress";
 import { MessageFeedback } from "@/components/ui/message-feedback";
 
 export const Thread: FC = () => {
+  const viewportRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom when new messages are added or during streaming
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    const scrollToBottom = () => {
+      viewport.scrollTo({
+        top: viewport.scrollHeight,
+        behavior: 'smooth'
+      });
+    };
+
+    // Initial scroll to bottom
+    scrollToBottom();
+
+    // Set up observer for content changes (new messages, streaming updates)
+    const observer = new MutationObserver((mutations) => {
+      let shouldScroll = false;
+      
+      mutations.forEach((mutation) => {
+        // Check if new content was added
+        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+          shouldScroll = true;
+        }
+        // Check if text content changed (streaming updates)
+        if (mutation.type === 'characterData') {
+          shouldScroll = true;
+        }
+      });
+
+      if (shouldScroll) {
+        // Small delay to ensure content is rendered
+        setTimeout(scrollToBottom, 50);
+      }
+    });
+
+    // Observe changes in the viewport
+    observer.observe(viewport, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <ThreadPrimitive.Root
       className="bg-background box-border flex h-full flex-col overflow-hidden"
@@ -35,7 +86,10 @@ export const Thread: FC = () => {
         ["--thread-max-width" as string]: "42rem",
       }}
     >
-      <ThreadPrimitive.Viewport className="flex h-full flex-col items-center overflow-y-scroll scroll-smooth bg-inherit px-4 pt-8">
+      <ThreadPrimitive.Viewport 
+        ref={viewportRef}
+        className="flex h-full flex-col items-center overflow-y-scroll scroll-smooth bg-inherit px-4 pt-8"
+      >
         <ThreadWelcome />
 
         <ThreadPrimitive.Messages
@@ -346,6 +400,9 @@ const AssistantMessage: FC = () => {
             tools: { 
               restart_server: RestartServerTool,
               stop_server: StopServerTool,
+              get_server_status: ServerStatusTool,
+              query_autorag: AutoRAGQueryTool,
+              pterodactyl_action: PterodactylActionTool,
               Fallback: ToolFallback 
             } 
           }}

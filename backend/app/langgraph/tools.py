@@ -4,8 +4,8 @@ import asyncio
 from ..services.pterodactyl_client import PterodactylClient, PterodactylAPIError
 from ..services.pterodactyl_admin_client import PterodactylAdminClient, create_pterodactyl_admin_client
 from ..services.user_manager import user_manager
-from ..services.cloudflare_autorag import create_autorag_service, format_autorag_response
-from ..services.cache_service import get_cache
+from ..services.cloudflare_autorag import create_autorag_service, format_autorag_response, AutoRAGConfig
+from ..services.similarity_cache import get_similarity_cache
 from ..services.request_deduplicator import get_deduplicator
 from ..services.local_docs_fallback import get_local_docs_fallback
 import json
@@ -213,7 +213,7 @@ async def detect_server_id(pterodactyl_user_id: int, server_hint: str = None) ->
     raise ValueError("No servers found for your account")
 
 @tool
-async def query_documentation(query: str, game_type: str = None, **kwargs) -> str:
+async def query_documentation(query: str, game_type: str = None, state: dict = None, **kwargs) -> str:
     """
     Query documentation for server management, game-specific guides, and troubleshooting information.
     This searches through comprehensive documentation from Pterodactyl, game guides, and server management resources.
@@ -232,27 +232,37 @@ async def query_documentation(query: str, game_type: str = None, **kwargs) -> st
         if len(query) > 500:
             query = query[:500] + "..."
         
-        # Check cache first for performance improvement
-        cache = get_cache()
+        # Check enhanced similarity cache first for performance improvement
+        cache = get_similarity_cache('strong')  # Use strong similarity matching
         cached_response = await cache.get(query, game_type)
         if cached_response:
-            return f"{cached_response}\n\n*[Cached response for faster performance]*"
+            return cached_response  # Cache already includes similarity note if applicable
         
         # Use deduplicator to prevent multiple identical queries
         deduplicator = get_deduplicator()
         
         async def _execute_query():
-            async with create_autorag_service() as autorag:
-                # Build enhanced query with context (but keep it concise)
-                enhanced_query = query.strip()
-                
-                # Add game type context if provided
-                if game_type and game_type != "Unknown":
-                    enhanced_query = f"Game: {game_type}\n\nQuestion: {enhanced_query}"
-                
+            # Use rewritten query if available from LangGraph state
+            search_query = query
+            if state and state.get("rewritten_query"):
+                search_query = state["rewritten_query"]
+                print(f"Using LLM-rewritten query: {search_query}")
+            
+            # Create optimized AutoRAG config for faster performance
+            config = AutoRAGConfig(
+                enable_query_rewriting=False,       # Disable AutoRAG rewriting since we use LLM rewriting
+                enable_similarity_cache=True,       # Enable built-in caching
+                chunk_size=256,                     # Smaller chunks for speed
+                chunk_overlap=0.15,                 # 15% overlap for continuity
+                max_results=3,                      # Limit results to prevent large responses
+                match_threshold=0.3,                # Lower threshold for broader matches
+                similarity_cache_threshold='strong' # Strong similarity matching
+            )
+            
+            async with create_autorag_service(config) as autorag:
                 response = await autorag.query(
-                    question=enhanced_query,
-                    max_results=3  # Reduced to prevent large responses
+                    question=search_query,  # Use LLM-rewritten query or original
+                    game_type=game_type     # Pass game_type for context-aware filtering
                 )
                 
                 formatted_response = format_autorag_response(response)
@@ -261,7 +271,7 @@ async def query_documentation(query: str, game_type: str = None, **kwargs) -> st
                 if not formatted_response or formatted_response.strip() == "No answer found":
                     return "I couldn't find specific information about that in the documentation. Could you rephrase your question or be more specific?"
                 
-                # Cache the successful response
+                # Cache the successful response (use original query as cache key)
                 await cache.set(query, formatted_response, game_type)
                 
                 return formatted_response
@@ -280,7 +290,6 @@ async def query_documentation(query: str, game_type: str = None, **kwargs) -> st
             
             if fallback_result:
                 # Cache the fallback result too
-                cache = get_cache()
                 await cache.set(query, fallback_result, game_type)
                 return fallback_result
         except Exception as fallback_error:

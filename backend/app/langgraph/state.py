@@ -26,4 +26,7 @@ class AgentState(TypedDict):
     # System context
     system_prompt: str
     frontend_tools: List[Dict[str, Any]]
-    game_type: Optional[str]
+    
+    # Query Enhancement (NEW)
+    rewritten_query: Optional[str]  # LLM-rewritten query for better retrieval
+    query_rewrite_enabled: Optional[bool]  # Control query rewriting behavior

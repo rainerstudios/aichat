@@ -2,6 +2,18 @@ import httpx
 import json
 import os
 from typing import Dict, List, Any, Optional
+from dataclasses import dataclass
+
+@dataclass
+class AutoRAGConfig:
+    """Configuration for AutoRAG optimization features"""
+    enable_query_rewriting: bool = True
+    enable_similarity_cache: bool = True
+    chunk_size: int = 256  # Optimized for speed
+    chunk_overlap: float = 0.15  # 15% overlap
+    max_results: int = 5
+    match_threshold: float = 0.3
+    similarity_cache_threshold: str = 'strong'  # exact, strong, broad, loose
 
 class CloudflareAutoRAGService:
     """
@@ -11,10 +23,12 @@ class CloudflareAutoRAGService:
     def __init__(self, 
                  account_id: str = None, 
                  api_token: str = None,
-                 autorag_instance_id: str = None):
+                 autorag_instance_id: str = None,
+                 config: AutoRAGConfig = None):
         self.account_id = account_id or os.getenv("CLOUDFLARE_ACCOUNT_ID")
         self.api_token = api_token or os.getenv("CLOUDFLARE_API_TOKEN") 
         self.autorag_instance_id = autorag_instance_id or os.getenv("CLOUDFLARE_AUTORAG_INSTANCE_ID")
+        self.config = config or AutoRAGConfig()
         
         if not all([self.account_id, self.api_token, self.autorag_instance_id]):
             raise ValueError("Missing required Cloudflare credentials: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, CLOUDFLARE_AUTORAG_INSTANCE_ID")
@@ -36,27 +50,152 @@ class CloudflareAutoRAGService:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.session.aclose()
     
+    def _rewrite_query(self, question: str, game_type: str = None) -> str:
+        """
+        Rewrite user query for better vector search performance
+        Transforms conversational queries into keyword-rich search terms
+        """
+        if not self.config.enable_query_rewriting:
+            return question
+            
+        # Basic query enhancement patterns
+        query = question.lower().strip()
+        
+        # Extract key terms and add synonyms
+        enhanced_terms = []
+        
+        # Game-specific enhancements
+        if game_type:
+            if "minecraft" in game_type.lower():
+                enhanced_terms.extend(["minecraft", "server", "configuration", "setup"])
+            elif "pterodactyl" in query or "panel" in query:
+                enhanced_terms.extend(["pterodactyl", "panel", "server management", "configuration"])
+        
+        # Problem-solving keywords
+        if any(word in query for word in ["error", "issue", "problem", "not working", "broken"]):
+            enhanced_terms.extend(["troubleshooting", "fix", "solution", "debugging"])
+        
+        # Setup/configuration keywords
+        if any(word in query for word in ["setup", "install", "configure", "settings"]):
+            enhanced_terms.extend(["installation", "configuration", "guide", "tutorial"])
+        
+        # Performance keywords
+        if any(word in query for word in ["slow", "lag", "performance", "optimize"]):
+            enhanced_terms.extend(["performance", "optimization", "tuning", "resources"])
+        
+        # Combine original query with enhanced terms
+        all_terms = [question] + enhanced_terms
+        enhanced_query = " ".join(set(all_terms))  # Remove duplicates
+        
+        # Limit length to prevent issues
+        if len(enhanced_query) > 200:
+            enhanced_query = enhanced_query[:200]
+        
+        return enhanced_query
+    
+    def _build_metadata_filters(self, game_type: str = None, doc_types: List[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Build metadata filters for scoped retrieval
+        Reduces search space and improves relevance
+        """
+        filters = []
+        
+        # Game-type based filtering
+        if game_type and game_type != "Unknown":
+            # Create a compound filter for game-type folders
+            game_filter = {
+                "type": "or",
+                "filters": [
+                    {"type": "eq", "key": "folder", "value": f"{game_type.lower()}/"},
+                    {"type": "eq", "key": "folder", "value": "general/"},
+                    {"type": "eq", "key": "folder", "value": "pterodactyl/"}
+                ]
+            }
+            filters.append(game_filter)
+        
+        # Document type filtering (if specified)
+        if doc_types:
+            doc_type_filter = {
+                "type": "or",
+                "filters": [
+                    {"type": "eq", "key": "folder", "value": f"{doc_type}/"}
+                    for doc_type in doc_types
+                ]
+            }
+            filters.append(doc_type_filter)
+        
+        # Recent documents preference (last 6 months)
+        import time
+        six_months_ago = int((time.time() - 15552000) * 1000)  # 6 months in milliseconds
+        filters.append({
+            "type": "gte",
+            "key": "timestamp",
+            "value": str(six_months_ago)
+        })
+        
+        if len(filters) == 1:
+            return filters[0]
+        elif len(filters) > 1:
+            return {
+                "type": "and",
+                "filters": filters
+            }
+        
+        return None
+
     async def query(self, 
                    question: str, 
-                   max_results: int = 5,
-                   filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                   max_results: int = None,
+                   filters: Optional[Dict[str, Any]] = None,
+                   game_type: str = None) -> Dict[str, Any]:
         """
-        Query the AutoRAG system with a question
+        Query the AutoRAG system with enhanced features
         
         Args:
             question: The user's question
-            max_results: Maximum number of results to return
-            filters: Optional metadata filters for retrieval
+            max_results: Maximum number of results to return (uses config default if None)
+            filters: Optional metadata filters for retrieval (merged with auto-generated filters)
+            game_type: Game type for context-aware filtering and query rewriting
             
         Returns:
             Dict containing the answer and source documents
         """
         try:
+            # Use config defaults if not specified
+            max_results = max_results or self.config.max_results
+            
+            # Apply query rewriting for better retrieval
+            enhanced_query = self._rewrite_query(question, game_type)
+            
+            # Build metadata filters for scoped retrieval
+            auto_filters = self._build_metadata_filters(game_type)
+            
+            # Merge user filters with auto-generated filters
+            final_filters = filters
+            if auto_filters:
+                if filters:
+                    final_filters = {
+                        "type": "and",
+                        "filters": [filters, auto_filters]
+                    }
+                else:
+                    final_filters = auto_filters
+            
+            # Build request payload with optimization parameters
             query_data = {
-                "query": question
+                "query": enhanced_query,
+                "rewrite_query": self.config.enable_query_rewriting,
+                "max_num_results": max_results,
+                "ranking_options": {
+                    "score_threshold": self.config.match_threshold
+                }
             }
             
-            # Use the ai-search endpoint as shown in your curl example
+            # Add filters if present
+            if final_filters:
+                query_data["filters"] = final_filters
+            
+            # Use the ai-search endpoint with optimized parameters
             response = await self.session.post(f"{self.base_url}/ai-search", json=query_data)
             response.raise_for_status()
             
@@ -67,9 +206,11 @@ class CloudflareAutoRAGService:
                 result_data = result.get("result", {})
                 return {
                     "answer": result_data.get("response", "No answer found"),
-                    "sources": result_data.get("sources", []),
+                    "sources": result_data.get("data", []),  # Updated to match AutoRAG format
                     "query": question,
-                    "search_query": result_data.get("search_query", question),
+                    "search_query": result_data.get("search_query", enhanced_query),
+                    "enhanced_query": enhanced_query,
+                    "filters_applied": final_filters is not None,
                     "confidence": 1.0 if result_data.get("response") else 0.0
                 }
             else:
@@ -79,6 +220,7 @@ class CloudflareAutoRAGService:
                     "answer": f"Error: {error_msg}",
                     "sources": [],
                     "query": question,
+                    "enhanced_query": enhanced_query,
                     "confidence": 0.0
                 }
             
@@ -119,9 +261,19 @@ class CloudflareAutoRAGService:
             raise Exception(f"Failed to get AutoRAG status: {e}")
 
 # Factory function
-def create_autorag_service() -> CloudflareAutoRAGService:
-    """Create AutoRAG service instance"""
-    return CloudflareAutoRAGService()
+def create_autorag_service(config: AutoRAGConfig = None) -> CloudflareAutoRAGService:
+    """Create AutoRAG service instance with optimized configuration"""
+    if config is None:
+        config = AutoRAGConfig(
+            enable_query_rewriting=True,
+            enable_similarity_cache=True,
+            chunk_size=256,  # Optimized for speed
+            chunk_overlap=0.15,
+            max_results=5,
+            match_threshold=0.3,
+            similarity_cache_threshold='strong'
+        )
+    return CloudflareAutoRAGService(config=config)
 
 # Helper function to format AutoRAG response for LangGraph tools
 def format_autorag_response(response: Dict[str, Any]) -> str:

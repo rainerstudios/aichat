@@ -1,7 +1,7 @@
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.errors import NodeInterrupt
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
@@ -10,7 +10,100 @@ from .state import AgentState
 from ..services.pterodactyl_admin_client import create_pterodactyl_admin_client
 
 model = ChatOpenAI()
+query_rewrite_model = ChatOpenAI(model="gpt-4o-mini", temperature=0)  # Fast, deterministic model for query rewriting
 
+def format_chat_history(messages, max_messages=5):
+    """Format recent chat history for query rewriting context"""
+    if not messages:
+        return "No previous context"
+    
+    # Get last few messages for context
+    recent_messages = messages[-max_messages:]
+    formatted = []
+    
+    for msg in recent_messages:
+        if hasattr(msg, 'content') and msg.content:
+            role = "User" if isinstance(msg, HumanMessage) else "Assistant"
+            content = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+            formatted.append(f"{role}: {content}")
+    
+    return "\n".join(formatted) if formatted else "No previous context"
+
+async def query_rewrite_node(state: AgentState, config) -> AgentState:
+    """
+    LLM-powered query rewriting node for enhanced document retrieval
+    Transforms conversational queries into technical, keyword-rich search queries
+    """
+    # Skip rewriting if disabled or no human message
+    if not state.get("query_rewrite_enabled", True):
+        return state
+    
+    messages = state["messages"]
+    if not messages or not isinstance(messages[-1], HumanMessage):
+        return state
+    
+    original_query = messages[-1].content
+    if not original_query or len(original_query.strip()) < 5:
+        return state
+    
+    # Get chat history and game context
+    chat_history = format_chat_history(messages[:-1])
+    game_type = state.get("game_type", "Unknown")
+    
+    # Build context-aware rewriting prompt
+    rewrite_prompt = f"""You are a search query optimizer for technical gaming server documentation.
+
+Transform the user's conversational query into a technical, keyword-rich search query optimized for vector database retrieval.
+
+CONTEXT:
+- Game Type: {game_type}
+- Chat History: {chat_history}
+
+GUIDELINES:
+1. Extract core technical concepts and problems
+2. Add relevant technical keywords and synonyms
+3. Include error codes, technical terms, and troubleshooting keywords
+4. Keep it focused and under 50 words
+5. Remove conversational filler words
+
+EXAMPLES:
+User: "how do i make this work when my api call keeps failing?"
+Rewritten: "API call failure troubleshooting authentication headers rate limiting network timeout 500 error"
+
+User: "my minecraft server won't start"
+Rewritten: "minecraft server startup failure boot error configuration troubleshooting launch issues"
+
+User: "players can't connect to my server"
+Rewritten: "server connection issues player connectivity firewall port forwarding network troubleshooting"
+
+Original Query: {original_query}
+
+Rewritten Query:"""
+
+    try:
+        # Use fast model for query rewriting
+        response = await query_rewrite_model.ainvoke([
+            SystemMessage(content=rewrite_prompt)
+        ])
+        
+        rewritten_query = response.content.strip()
+        
+        # Validate the rewritten query
+        if (rewritten_query and 
+            len(rewritten_query) > 5 and 
+            len(rewritten_query) < 300 and
+            rewritten_query.lower() != original_query.lower()):
+            
+            state["rewritten_query"] = rewritten_query
+            print(f"Query rewritten: '{original_query}' -> '{rewritten_query}'")
+        else:
+            print(f"Query rewriting failed or unnecessary for: '{original_query}'")
+            
+    except Exception as e:
+        print(f"Query rewriting error: {e}")
+        # Continue without rewriting on error
+    
+    return state
 
 def should_continue(state):
     messages = state["messages"]
@@ -119,19 +212,24 @@ async def run_tools(input, config, **kwargs):
     return await tool_node.ainvoke(input, config, **kwargs)
 
 
-# Define a new graph
+# Define a new graph with query rewriting
 workflow = StateGraph(AgentState)
 
+# Add nodes
+workflow.add_node("query_rewrite", query_rewrite_node)  # NEW: Query rewriting node
 workflow.add_node("agent", call_model)
 workflow.add_node("tools", run_tools)
 
-workflow.set_entry_point("agent")
+# Set entry point to query rewriting
+workflow.set_entry_point("query_rewrite")
+
+# Flow: query_rewrite -> agent -> tools/END
+workflow.add_edge("query_rewrite", "agent")
 workflow.add_conditional_edges(
     "agent",
     should_continue,
     ["tools", END],
 )
-
 workflow.add_edge("tools", "agent")
 
 assistant_ui_graph = workflow.compile()

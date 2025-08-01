@@ -80,3 +80,9 @@ def get_cache() -> ResponseCache:
     if _cache_instance is None:
         _cache_instance = ResponseCache(ttl_seconds=300, max_size=100)  # 5 min TTL, 100 entries max
     return _cache_instance
+
+# New enhanced cache with similarity matching
+def get_enhanced_cache():
+    """Get enhanced similarity cache - preferred for new implementations"""
+    from .similarity_cache import get_similarity_cache
+    return get_similarity_cache('strong')

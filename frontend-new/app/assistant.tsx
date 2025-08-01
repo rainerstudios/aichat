@@ -74,6 +74,52 @@ export const Assistant = () => {
 
   // No API loading needed - using local state only
 
+  const generateResponse = useCallback(async (messages: ThreadMessageLike[]) => {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: messages,
+        pteroContext: pteroContext,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    let assistantContent = "";
+
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('0:"')) {
+            try {
+              const content = JSON.parse(line.slice(2));
+              if (typeof content === 'string') {
+                assistantContent += content;
+              }
+            } catch {
+              // Skip invalid JSON
+            }
+          }
+        }
+      }
+    }
+
+    return assistantContent;
+  }, [pteroContext]);
+
   const onNew = useCallback(async (message: AppendMessage) => {
     if (message.content[0]?.type !== "text") {
       throw new Error("Only text messages are supported");
@@ -97,47 +143,7 @@ export const Assistant = () => {
     setIsRunning(true);
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messages: [userMessage],
-          pteroContext: pteroContext,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      let assistantContent = "";
-
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n');
-
-          for (const line of lines) {
-            if (line.startsWith('0:"')) {
-              try {
-                const content = JSON.parse(line.slice(2));
-                if (typeof content === 'string') {
-                  assistantContent += content;
-                }
-              } catch {
-                // Skip invalid JSON
-              }
-            }
-          }
-        }
-      }
+      const assistantContent = await generateResponse([userMessage]);
 
       const assistantMessage: ThreadMessageLike = {
         role: "assistant",
@@ -159,7 +165,55 @@ export const Assistant = () => {
     } finally {
       setIsRunning(false);
     }
-  }, [currentThreadId, pteroContext]);
+  }, [currentThreadId, generateResponse]);
+
+  const onReload = useCallback(async (parentId: string) => {
+    const currentMessages = threads.get(currentThreadId) || [];
+    
+    // Find the parent message and get all messages up to that point
+    const parentIndex = currentMessages.findIndex(msg => msg.id === parentId);
+    if (parentIndex === -1) {
+      console.warn('Parent message not found for reload');
+      return;
+    }
+
+    // Get conversation history up to the parent message (excluding the assistant response we're reloading)
+    const conversationHistory = currentMessages.slice(0, parentIndex + 1);
+    
+    // Remove the assistant message we're regenerating and any messages after it
+    setThreads(prev => {
+      const newMap = new Map(prev);
+      newMap.set(currentThreadId, conversationHistory);
+      return newMap;
+    });
+
+    setIsRunning(true);
+
+    try {
+      // Re-generate response using the conversation history
+      const assistantContent = await generateResponse(conversationHistory);
+
+      const newAssistantMessage: ThreadMessageLike = {
+        role: "assistant",
+        content: [{ type: "text", text: assistantContent }],
+        id: `msg-${Date.now()}-assistant-reload`,
+        createdAt: new Date(),
+      };
+
+      // Add the new assistant message
+      setThreads(prev => {
+        const newMap = new Map(prev);
+        const currentMessages = newMap.get(currentThreadId) || [];
+        newMap.set(currentThreadId, [...currentMessages, newAssistantMessage]);
+        return newMap;
+      });
+
+    } catch (error) {
+      console.error('Reload Error:', error);
+    } finally {
+      setIsRunning(false);
+    }
+  }, [currentThreadId, threads, generateResponse]);
 
   const threadListAdapter = useMemo(() => {
     // Ensure we have valid threads array
@@ -256,6 +310,7 @@ export const Assistant = () => {
     messages: currentMessages,
     isRunning,
     onNew,
+    onReload,
     setMessages: (messages) => {
       setThreads(prev => new Map(prev).set(currentThreadId, messages));
     },

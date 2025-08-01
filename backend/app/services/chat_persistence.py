@@ -33,17 +33,23 @@ class ChatPersistenceService:
         elif "postgresql://" in self.database_url and "+asyncpg" not in self.database_url:
             self.database_url = self.database_url.replace("postgresql://", "postgresql+asyncpg://")
         
-        # Remove sslmode parameter for asyncpg (it uses ssl parameter instead)
+        # Handle SSL configuration for NeonDB/asyncpg
         if "sslmode=require" in self.database_url:
-            self.database_url = self.database_url.replace("?sslmode=require", "?ssl=require")
-            self.database_url = self.database_url.replace("&sslmode=require", "")
+            self.database_url = self.database_url.replace("sslmode=require", "ssl=require")
         
         self.engine = create_async_engine(
             self.database_url,
             echo=False,  # Set to True for SQL debugging
-            pool_size=10,
-            max_overflow=20,
-            pool_recycle=3600,
+            pool_size=5,
+            max_overflow=10,
+            pool_recycle=1800,  # 30 minutes
+            pool_pre_ping=True,  # Verify connections before use
+            pool_timeout=30,
+            connect_args={
+                "server_settings": {
+                    "jit": "off"  # Disable JIT for better NeonDB compatibility
+                }
+            }
         )
         
         self.async_session = async_sessionmaker(
